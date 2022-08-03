@@ -1,0 +1,607 @@
+---
+title: "Final Analysis before moving to markdown"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r}
+library(tidyverse)
+library(tsibbledata)
+library(tsibble)
+library(lubridate)
+library(ggplot2)
+library(ggthemes)
+```
+
+
+```{r}
+nyc_bikes_df <- tsibbledata::nyc_bikes
+nyc_bikes_df
+# glimpse(nyc_bikes_df)
+# view(nyc_bikes_df)
+```
+
+1. Adding columns: start day of the week, month, time
+2. Creating a column that shows the season
+3. Creating a column for age of rider and removing two outliers (born 1880s)
+4. Showing hire durations
+
+```{r}
+#creating 4 columns: date, and start day, month and hour
+nyc_bikes_df <- nyc_bikes_df %>% 
+  mutate(date = as_date(start_time), .after = 2,
+         start_day = wday(start_time, label = TRUE, abbr = FALSE),
+         start_month = month(start_time, label = TRUE, abbr = FALSE),
+         start_hour = hour(start_time), minute(start_time))
+#Couldn't unite the start time hours and mins but I am only going to look at 
+#hour anyway so it doesn't matter:
+nyc_bikes_df <- nyc_bikes_df %>% 
+  unite(start_hire_time, 
+        start_hour, `minute(start_time)`, 
+        sep = ":", 
+        remove = FALSE)
+nyc_bikes_df
+
+#adding season column just in case
+nyc_bikes_df <- nyc_bikes_df %>% 
+  mutate(season = case_when(
+    start_month %in% c("December", "January", "February") ~ "Winter",
+    start_month %in% c("March", "April", "May") ~ "Spring",
+    start_month %in% c("June", "July", "August") ~ "Summer",
+    start_month %in% c("September", "October", "November") ~ "Autumn",
+    ), .after = 5)
+nyc_bikes_df
+
+# showing duration of hire (2 were hired for 3 days and the rest less than a day
+# most were hired for less than 50 mins)
+nyc_bikes_df <- nyc_bikes_df %>% 
+  mutate(hire_duration = stop_time - start_time, # this shows 1.50(= 1min 30sec)
+         length_of_hire_rounded = as.period(round(stop_time - start_time)), 
+         hours_hired = as.numeric(length_of_hire_rounded, "hours")
+  )
+nyc_bikes_df
+
+#Finding people's ages in 2018 - 2018 was the year the data was collected
+nyc_bikes_df <- nyc_bikes_df %>% 
+  mutate(age_years = as.numeric(2018 - birth_year))  
+nyc_bikes_df
+
+# There are two rows where the customer is born in the 1880s. That can not be
+# right so I am removing those two rows (neither has a gender either)
+nyc_bikes_df <- nyc_bikes_df %>% 
+  filter(birth_year > 1900)
+nyc_bikes_df
+
+
+```
+
+Looking at subscribers, customers and unknown genders
+```{r}
+# 3951 are subscribers 
+nyc_bikes_df %>% 
+  filter(type == "Subscriber")
+
+# 315 are customers
+nyc_bikes_df %>% 
+  filter(type == "Customer")
+
+# 267 have gender = "unknown" and I noticed that most are 49 years old (n = 243)
+nyc_bikes_df %>% 
+  filter(gender == "Unknown" & age_years == 49)
+
+# 49 year olds:
+# 243/269 have gender unknown (26 have a gender).
+# 89/269 are subscribers, the rest (180) are customers (out of 315 in total)
+age49 <- nyc_bikes_df %>% 
+  filter(age_years == 49)
+# view(age49)
+
+```
+
+
+### What is the pattern of bike hires over time (e.g. within a year, month, 
+week, or day)?
+
+```{r}
+# view(nyc_bikes_df)
+# 4,266 rows
+```
+
+Across the year, total bikes hired = 4,266 rows 
+
+
+Total rentals per day:
+```{r}
+
+count_per_day <- nyc_bikes_df %>% 
+  group_by(date) %>% 
+  summarise(rentals_per_day = n()) %>% 
+  arrange(desc(rentals_per_day))
+count_per_day
+
+
+count_per_day %>% 
+  ggplot()+
+  aes(x = date, y = rentals_per_day)+
+  geom_line() + 
+  labs(x = "\nDays in 2018",
+       y = "Total number of rentals per day",
+       title = "Total number of bike rentals per day",
+       subtitle = "For every day in the year 2018")+
+  theme_bw()
+
+```
+
+From the graph, we can see an increase in total rentals per day as we head 
+from winter into summer (the spike is on 31st July, a Tuesday) and then a 
+decrease again as temperatures cool as we head into autumn and winter again.  
+
+Though a trend can be seen, it is a bit messy. To look at it another way we 
+can look at the total bikes rented per month or by season:
+```{r}
+count_per_month <- nyc_bikes_df %>% 
+  group_by(season, start_month) %>% 
+  summarise(rentals_per_month = n()) %>% 
+  arrange(desc(rentals_per_month))
+count_per_month
+
+
+count_per_month %>% 
+  ggplot()+
+  aes(x = start_month, y = rentals_per_month) +
+  geom_col(fill = "#007cb9")+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))+
+  geom_text(aes(label = rentals_per_month),
+    position = position_dodge(0.9),
+    vjust = 0)+ 
+  labs(x = "Month (in 2018)", 
+       y = "Total rentals per month", 
+       title = "Total Bike Rentals per Month in 2018")
+
+count_per_month %>% 
+  ggplot()+
+  aes(x = season, y = rentals_per_month)+
+  geom_col(fill = "#007cb9") + 
+  labs(x = "Month (in 2018)", 
+       y = "Total rentals per month", 
+       title = "Total Bike Rentals per Month in 2018")
+```
+
+
+Total bikes hired per day:
+```{r}
+weekdays <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+#Tues: 720!, Fri 658, Wed, Thurs, Mon 628, Sat 523, Sun(453!))
+bikes_per_day <- nyc_bikes_df %>% 
+  group_by(start_day) %>% 
+  summarise(num_of_bikes_hired = n()) %>% 
+  arrange(desc(num_of_bikes_hired))
+bikes_per_day
+
+bikes_per_day %>%  
+  ggplot(aes(x = start_day, y = num_of_bikes_hired))+
+  scale_x_discrete(limits = weekdays) +
+    geom_col()+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))+
+  geom_text(aes(label = num_of_bikes_hired),
+    position = position_dodge(0.9),
+    vjust = 0)
+
+
+```
+
+From above, we can see that weekdays are more popular bike hire days than 
+weekends. 720 bikes were hired on Tuesdays compared with 453 on Sundays. Was 
+this the case every month? 
+
+```{r}
+monthly_bikes_per_day <-nyc_bikes_df %>% 
+  group_by(season, start_month, start_day) %>% 
+  summarise(num_of_bikes_hired = n())
+monthly_bikes_per_day
+
+
+monthly_bikes_per_day %>% 
+  ggplot()+
+  aes(x = start_day, y = num_of_bikes_hired, 
+      fill = start_day)+
+  scale_x_discrete(limits = weekdays) +
+  geom_col() + 
+  facet_wrap(~start_month)+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))
+
+monthly_bikes_per_day %>% 
+  ggplot()+
+  aes(x = start_day, y = num_of_bikes_hired, 
+      group = start_month, colour = start_month)+
+  scale_x_discrete(limits = weekdays) +
+  geom_line()+
+  facet_wrap(~season)+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))
+```
+
+
+
+Are people mostly travelling at commuting times then? Looking at the full year:
+```{r}
+time_of_ride <- nyc_bikes_df %>% 
+  group_by(start_hour) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+time_of_ride
+
+time_of_ride %>% 
+  ggplot()+
+  aes(x = start_hour, y = count)+
+  geom_col(fill = "#007cb9")+
+  theme_bw()+
+  geom_text(aes(label = count),
+    position = position_dodge(0.9),
+    vjust = 0)+
+  scale_x_continuous(breaks = c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)) + 
+  labs(x = "\nHire Start Time (24hr clock", 
+       y = "Total number of hires", 
+       title = "Total number of hires by hour across the year 2018")
+
+```
+Looking by day and month: 
+```{r}
+#month
+time_of_ride_by_month <- nyc_bikes_df %>% 
+  group_by(start_month, start_hour) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+time_of_ride
+
+time_of_ride_by_month %>% 
+  ggplot()+
+  aes(x = start_hour, y = count)+
+  geom_col()+
+  facet_wrap(~start_month)
+```
+
+
+```{r}
+#day
+time_of_ride_by_day <- nyc_bikes_df %>% 
+  group_by(start_day, start_hour) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+time_of_ride
+
+time_of_ride_by_day %>% 
+  ggplot()+
+  aes(x = start_hour, y = count)+
+  geom_col()+
+  facet_wrap(~start_day)
+```
+
+
+
+
+___
+## Demographics 
+
+```{r}
+#there are 3069 males, 930 females, 267 unknown (243 of them are "49" years old)
+nyc_bikes_df %>% 
+  group_by(gender) %>% 
+  summarise(count = n())
+
+# 3,999 rows when taking out gender unknown
+minus_gender_unknown <- nyc_bikes_df %>% 
+  filter(gender %in% c("Male", "Female"))
+minus_gender_unknown
+
+```
+
+How many trips per gender?
+```{r}
+
+rentals_by_month_and_gender <- minus_gender_unknown %>% 
+  group_by(start_month, gender) %>% 
+  summarise(rentals_per_month = n()) 
+rentals_by_month_and_gender
+
+rentals_by_month_and_gender %>% 
+  ggplot()+
+  aes(x = start_month, y = rentals_per_month, group = gender, colour = gender)+
+  geom_point()+
+  geom_line() +
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))+
+  geom_text(aes(label = rentals_per_month),
+    position = position_dodge(1),
+    vjust = 0)
+  
+# rentals_by_gender <- minus_gender_unknown %>% 
+#   group_by(date, start_month, gender) %>% 
+#   summarise(rentals_per_day = n()) 
+# rentals_by_gender
+# 
+# rentals_by_gender %>% 
+#   ggplot()+
+#   aes(x = date, y = rentals_per_day)+
+#   geom_point() +
+#   facet_grid(~gender)+
+#   theme(axis.text.x = element_text(angle=45, hjust=0.9))
+# 
+# rentals_by_gender %>% 
+#   filter(gender == "Male") %>% 
+#   ggplot()+
+#   aes(x = date, y = rentals_per_day)+
+#   geom_point()
+# 
+#   rentals_by_gender %>% 
+#   filter(gender == "Female") %>% 
+#   ggplot()+
+#   aes(x = date, y = rentals_per_day)+
+#   geom_point()+
+#   theme(axis.text.x = element_text(angle=45, hjust=0.9))
+```
+February 2018 was the warmest on record... 
+
+
+
+Do males and females hire at different times of year/ days of week ? 
+
+
+```{r}
+#Tues: 720!, Fri 658, Wed, Thurs, Mon 628, Sat 523, Sun(453!))
+day_by_gender <- minus_gender_unknown %>% 
+  group_by(start_day, gender) %>% 
+  summarise(daily_users = n())
+day_by_gender
+
+day_by_gender %>% 
+  ggplot(aes(x = start_day, y = daily_users, fill = gender))+
+  scale_x_discrete(limits = weekdays) +
+  geom_col(position = "dodge")+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))+
+  geom_text(aes(label = daily_users),
+    position = position_dodge(0.9),
+    vjust = 0)
+```
+
+```{r}
+month_by_gender <- minus_gender_unknown %>% 
+  group_by(start_month, start_day, gender) %>% 
+  summarise(daily_users = n())
+month_by_gender
+
+
+month_by_gender %>% 
+  ggplot(aes(x = start_day, y = daily_users, fill = gender))+
+  scale_x_discrete(limits = weekdays) +
+  geom_col(position = "dodge") +
+  facet_wrap(~start_month)+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))
+```
+
+Difference in gender start location? (stereotype for business vs holiday)
+```{r}
+# same top 2 anyway 
+minus_gender_unknown %>% 
+  group_by(start_station, gender) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+
+```
+
+
+### AGE 
+
+How many rides per age
+```{r}
+nyc_bikes_df %>% 
+  group_by(age_years) %>% 
+  ggplot()+
+  aes(x = age_years) +
+  geom_bar()
+```
+
+rides per age by gender
+```{r}
+minus_gender_unknown %>% 
+  group_by(age_years, gender) %>% 
+  ggplot()+
+  aes(x = age_years, fill = gender) +
+  geom_bar()
+```
+
+
+## Type of trip
+
+subscriber or not:
+```{r}
+# nyc_bikes_df %>% 
+#   filter(type == "Subscriber")
+# 
+# nyc_bikes_df %>% 
+#   filter(type == "Customer")
+# 
+# nyc_bikes_df %>% 
+#   filter(is.na(type))
+# 3953 rows are subscribers (true) 
+# and 315 are customers (FALSE)
+# 0 NAs.
+# with the 49 year olds: 89/269 are subscribers, the rest (180) are customers (out of 315 in total)
+```
+
+
+DURATION:
+```{r}
+duration <- nyc_bikes_df %>% 
+  group_by(length_of_hire_rounded) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count)) 
+
+a <- nyc_bikes_df %>% 
+  mutate(duration_block = case_when(
+    length_of_hire_rounded <= "5M 0S" ~ "0 - 5", 
+    length_of_hire_rounded <= "10M 0S" & 
+      length_of_hire_rounded > "5M 0S" ~ "5 - 10",
+    length_of_hire_rounded <= "15M 0S" & 
+      length_of_hire_rounded > "10M 0S" ~ "10 - 15",
+    length_of_hire_rounded <= "20M 0S" & 
+      length_of_hire_rounded > "15M 0S" ~ "15 - 20",
+    length_of_hire_rounded <= "25M 0S" & 
+      length_of_hire_rounded > "20M 0S" ~ "20 - 25",
+    length_of_hire_rounded <= "30M 0S" & 
+      length_of_hire_rounded > "25M 0S" ~ "25 - 30",
+    length_of_hire_rounded <= "35M 0S" & 
+      length_of_hire_rounded > "30M 0S" ~ "30 - 35",
+    length_of_hire_rounded <= "40M 0S" & 
+      length_of_hire_rounded > "35M 0S" ~ "35 - 40",
+    length_of_hire_rounded <= "45M 0S" & 
+      length_of_hire_rounded > "40M 0S" ~ "40 - 45",
+    length_of_hire_rounded <= "50M 0S" & 
+      length_of_hire_rounded > "45M 0S" ~ "45 - 50",
+    length_of_hire_rounded <= "55M 0S" & 
+      length_of_hire_rounded > "50M 0S" ~ "50 - 55",
+    length_of_hire_rounded <= "60M 0S" & 
+      length_of_hire_rounded > "55M 0S" ~ "55 - 60",
+    length_of_hire_rounded <= "3H 0S" & 
+      length_of_hire_rounded > "1H 0S" ~ "1Hrs - 3Hrs",
+    length_of_hire_rounded > "3H 0S" ~ "3Hrs plus",
+  ))
+
+
+durations <- a %>% 
+  group_by(duration_block) %>% 
+  summarise(count = n()) 
+durations
+
+time_blocks <- c("0 - 5", "5 - 10", "10 - 15", "15 - 20", "20 - 25", "25 - 30",
+                 "30 - 35", "35 - 40", "40 - 45", "45 - 50", "50 - 55", 
+                 "55 - 60", "1Hrs - 3Hrs", "3Hrs plus")
+
+durations %>%   
+  ggplot()+
+  aes(x = duration_block, y = count) +
+  scale_x_discrete(limits = time_blocks) +
+  geom_col()+
+  theme(axis.text.x = element_text(angle=45, hjust=0.9))
+
+```
+
+
+
+### GEOGRAPHICAL SPREAD 
+
+Duration vs starting location 
+There are 52 start stations and 55 end stations 
+```{r}
+start_coords <- nyc_bikes_df %>%
+  unite("start_coords", start_lat, start_long, sep = ", ", remove = FALSE)
+start_coords
+```
+
+
+```{r}
+library(sf) # "simple features"
+library(rgeos)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(leaflet)
+```
+
+
+How many bikes from each station (start)
+```{r}
+
+# how many bikes from each station (52 start stations): 
+bikes_per_start_station <- nyc_bikes_df %>% 
+  group_by(start_long, start_lat, start_station) %>% 
+  summarise(total_hires = n(), average_duration = round(mean(hire_duration))) %>% 
+  arrange(desc(total_hires))
+bikes_per_start_station
+
+
+# 55 end stations
+bikes_per_end_station<- nyc_bikes_df %>%
+  group_by(end_long, end_lat, end_station) %>% 
+  summarise(total_returns = n(), average_duration = round(mean(hire_duration))) %>% 
+  arrange(desc(total_returns))
+bikes_per_end_station
+
+```
+
+
+
+
+```{r}
+#plot on scatter??
+bikes_per_start_station %>% 
+  ggplot()+
+  aes(x = start_station, y = total_hires)+
+  geom_point()
+
+#there are too many, filter for most popular
+bikes_per_start_station %>% 
+  filter(total_hires > 90) %>% 
+  ggplot()+
+  aes(x = start_station, y = total_hires)+
+  geom_col()
+```
+
+
+
+
+
+looking at radius:
+```{r}
+bikes_per_start_station %>% 
+  leaflet() %>% 
+  addTiles() %>% 
+  addCircleMarkers(lng = ~start_long, 
+                   lat = ~start_lat,
+                   radius = ~total_hires/10,
+                   popup = ~paste0("Start Station: ", start_station, 
+                                   "<br> Total Hires: ", total_hires, 
+                                   "<br> Average Duration: ", average_duration, 
+                                   " mins"))
+```
+
+
+radius in clusters (though I think it's better to see out in the open)
+```{r}
+bikes_per_start_station %>% 
+  leaflet() %>% 
+  addTiles() %>% 
+  addCircleMarkers(lng = ~start_long, 
+                   lat = ~start_lat,
+                   radius = ~total_hires/2,
+                   clusterOptions = markerClusterOptions(),
+                   popup = ~paste0("Start Station: ", start_station, 
+                                   "<br> Total Hires: ", total_hires))
+```
+
+
+```{r}
+bikes_per_end_station%>% 
+  leaflet() %>% 
+  addTiles() %>% 
+  addCircleMarkers(lng = ~end_long, 
+                   lat = ~end_lat,
+                   radius = ~total_returns/10,
+                   popup = ~paste0("End Station: ", end_station,
+                                   "<br>Total Returns ", total_returns, 
+                                   "<br> Average Duration: ", average_duration, 
+                                   " mins"))
+```
+
+
+
+DURATION BY STATION 
+```{r}
+nyc_bikes_df %>% 
+  group_by(start_station, type) %>%
+  summarise(count = n())
+  
+
+```
+
+
